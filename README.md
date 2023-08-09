@@ -20,8 +20,9 @@ cargo build --release
 ```
 
 
-## Feature
+## Feature/Plan
 
 - [x] Display version information for `.class` file
 - [x] Display max class version for `.jar` file
 - [ ] Respect multi-release Jar file
+- [ ] Use custom `.class` parser that supports latest `.class` file specification
