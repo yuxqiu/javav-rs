@@ -4,28 +4,33 @@ use std::{
 };
 
 use anyhow::{bail, Context};
-use classfile_parser::class_parser;
+use cafebabe::{parse_class_with_options, ParseOptions};
 use zip::ZipArchive;
 
 fn main() -> anyhow::Result<()> {
     for filepath in std::env::args().skip(1) {
         let filepath = &filepath;
+        let op = {
+            let mut op = ParseOptions::default();
+            op.parse_bytecode(false);
+            op
+        };
+        let f_fail_to_read = || format!("Failed to read java class from {}", filepath);
 
         if filepath.ends_with(".class") {
-            let classfile_bytes = fs::read(filepath)
-                .with_context(|| format!("Failed to read java class from {}", filepath))?;
+            let classfile_bytes = fs::read(filepath).with_context(f_fail_to_read)?;
 
-            let (major_version, minor_version) = parse_class_version(&classfile_bytes)?;
+            let (major_version, minor_version) = parse_class_with_options(&classfile_bytes, &op)
+                .map(|class| (class.major_version, class.minor_version))
+                .with_context(|| format!("Failed to parse java class from {}", filepath))?;
 
             println!(
                 "{}: compiled Java class data, version {}.{}",
                 filepath, major_version, minor_version
             );
         } else if filepath.ends_with(".jar") {
-            let err_f = || format!("Failed to read java class from {}", filepath);
-
-            let archive = File::open(filepath).with_context(err_f)?;
-            let mut zip = ZipArchive::new(archive).with_context(err_f)?;
+            let archive = File::open(filepath).with_context(f_fail_to_read)?;
+            let mut zip = ZipArchive::new(archive).with_context(f_fail_to_read)?;
 
             let mut major_version = 0;
             let mut minor_version = 0;
@@ -39,7 +44,18 @@ fn main() -> anyhow::Result<()> {
                         file.read_to_end(&mut classfile_bytes).with_context(|| "")?;
                         classfile_bytes
                     };
-                    let (major_version_c, minor_version_c) = parse_class_version(&classfile_bytes)?;
+
+                    let (major_version_c, minor_version_c) =
+                        parse_class_with_options(&classfile_bytes, &op)
+                            .map(|class| (class.major_version, class.minor_version))
+                            .with_context(|| {
+                                format!(
+                                    "Failed to parse java class from entry {} of {}",
+                                    file.name(),
+                                    filepath,
+                                )
+                            })?;
+
                     major_version = std::cmp::max(major_version, major_version_c);
                     if major_version == major_version_c && minor_version_c > minor_version {
                         minor_version = minor_version_c;
@@ -71,11 +87,4 @@ fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
-}
-
-fn parse_class_version(classfile_bytes: &[u8]) -> anyhow::Result<(u16, u16)> {
-    let (major_version, minor_version) = class_parser(classfile_bytes)
-        .map(|(_, class)| (class.major_version, class.minor_version))
-        .map_err(|err| err.to_owned())?;
-    Ok((major_version, minor_version))
 }
