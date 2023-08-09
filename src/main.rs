@@ -33,8 +33,6 @@ fn main() -> anyhow::Result<()> {
             for i in 0..zip.len() {
                 let mut file = zip.by_index(i)?;
 
-                // Package name cannot contain `-` https://docs.oracle.com/javase/specs/jls/se17/html/jls-6.html#d5e8745
-                // We should filter entry name to deal with the edge case
                 if file.name().ends_with(".class") {
                     let classfile_bytes = {
                         let mut classfile_bytes: Vec<u8> = Vec::new();
@@ -47,6 +45,15 @@ fn main() -> anyhow::Result<()> {
                         minor_version = minor_version_c;
                     }
                 }
+
+                // Package name cannot contain `-` and other forbidden characters
+                // https://docs.oracle.com/javase/specs/jls/se17/html/jls-6.html#d5e8745
+                // https://docs.oracle.com/javase/specs/jls/se17/html/jls-3.html#jls-3.8
+                //
+                // The packaged jar file may contain some `.class` files that are not supposed to
+                // be used and are placed in some strange folder. But Jar files packaged by
+                // commonly-used build tools are unlikely to contain these files.
+                // If this happens fairly often, we will implement a fix to deal with this situation.
 
                 // TODO: respect multi-release Jar file (pick the one with lowest major_version and minor_version)
             }
