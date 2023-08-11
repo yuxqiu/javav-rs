@@ -98,7 +98,7 @@ fn get_java_version_from_classfile(
     let f_fail_to_read = || format!("Failed to read class from {}", filepath);
     let classfile_bytes = fs::read(filepath).with_context(f_fail_to_read)?;
 
-    let major_version = get_major_version_from_class(&classfile_bytes, &op)
+    let major_version = get_major_version_from_class(&classfile_bytes, op)
         .with_context(|| format!("Failed to parse class from {}", filepath))?;
 
     Ok(
@@ -113,7 +113,7 @@ fn get_java_version_from_classfile(
 
 fn get_major_version_from_class(classfile_bytes: &[u8], op: &ParseOptions) -> anyhow::Result<u16> {
     let major_version =
-        parse_class_with_options(&classfile_bytes, &op).map(|class| class.major_version)?;
+        parse_class_with_options(classfile_bytes, op).map(|class| class.major_version)?;
 
     Ok(major_version)
 }
@@ -128,11 +128,10 @@ fn get_java_version_from_jarfile(filepath: &str, op: &ParseOptions) -> anyhow::R
     let major_version = if is_multi_release_jar(&mut zip)
         .with_context(|| format!("Failed to parse manifest file from {}", filepath))?
     {
-        get_major_version_from_multi_release_jar(&mut zip, &op)
+        get_major_version_from_multi_release_jar(&mut zip, op)
             .with_context(f_fail_to_get_major_version)?
     } else {
-        get_major_version_from_simple_jar(&mut zip, &op)
-            .with_context(f_fail_to_get_major_version)?
+        get_major_version_from_simple_jar(&mut zip, op).with_context(f_fail_to_get_major_version)?
     };
 
     Ok(
@@ -164,7 +163,7 @@ fn get_major_version_from_simple_jar(
                 classfile_bytes
             };
 
-            let major_version_c = get_major_version_from_class(&classfile_bytes, &op)
+            let major_version_c = get_major_version_from_class(&classfile_bytes, op)
                 .with_context(|| format!("Failed to parse class from entry {}", file.name()))?;
 
             major_version = std::cmp::max(major_version, major_version_c);
@@ -193,8 +192,8 @@ fn split_multi_release_path_to_java_version_and_filepath(
     // len(META-INF/versions/) == 18
     // Guaranteed to start at a new code point
     let version_start = &path[18..];
-    let filepath_start_idx = version_start.find("/");
-    let java_v = filepath_start_idx.map(|idx| version_start[..idx].parse().unwrap_or(0 as u16))?;
+    let filepath_start_idx = version_start.find('/');
+    let java_v = filepath_start_idx.map(|idx| version_start[..idx].parse().unwrap_or(0_u16))?;
 
     match java_v {
         9..=21 => Some((
@@ -244,10 +243,10 @@ fn get_major_version_from_multi_release_jar(
             classfile_bytes
         };
 
-        let major_version_c = get_major_version_from_class(&classfile_bytes, &op)
+        let major_version_c = get_major_version_from_class(&classfile_bytes, op)
             .with_context(|| format!("Failed to parse class from entry {}", file.name()))?;
         let major_version_c = if let Some(major_version_from_map) = map.get(file.name()) {
-            std::cmp::min(major_version_from_map.clone(), major_version_c)
+            std::cmp::min(*major_version_from_map, major_version_c)
         } else {
             major_version_c
         };
