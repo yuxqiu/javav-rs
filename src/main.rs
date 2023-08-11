@@ -8,7 +8,19 @@ use cafebabe::{parse_class_with_options, ParseOptions};
 use zip::ZipArchive;
 
 fn main() -> anyhow::Result<()> {
-    for filepath in std::env::args().skip(1) {
+    let args: Vec<_> = std::env::args().collect();
+
+    if args.len() == 1 {
+        println!(
+            "\
+        A tool to display version information for .class files and .jar files (max class version inside jar).\n\n\
+        Usage: {} [file ...]\
+      ",
+            &args[0]
+        );
+    }
+
+    for filepath in &args[1..] {
         let filepath = &filepath;
         let op = {
             let mut op = ParseOptions::default();
