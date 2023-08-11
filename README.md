@@ -1,6 +1,6 @@
 ## javav-rs
 
-Displays version information for `.class` files (major.minor) and `.jar` files (max class version inside jar). One possible use case is to determine the minimum JVM version required to run given `.class` or `.jar` files.
+A tool to find the minimum Java version required to run given `.class` and `.jar` files.
 
 Support up to Java 17 on Windows, macOS, and Linux.
 
@@ -14,15 +14,15 @@ You can download the pre-build artifacts on the [Release](https://github.com/yux
 
 ```console
 $ ./javav-rs
-A tool to display version information for .class files and .jar files (max class version inside jar).
+A tool to find the minimum Java version required to run given .class and .jar files.
 
 Usage: ./javav-rs [file ...]
 ```
 
 ```console
 $ ./javav-rs Main.class Main.jar
-Main.class: compiled Java class data, version 61.0
-Main.jar: Java archive data (JAR), max class version 52.0
+Main.class: compiled Java class data, require Java 17 or above
+Main.jar: Java archive data (JAR), require Java 8 or above
 ```
 
 
