@@ -52,22 +52,6 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn is_multi_release_jar(zip: &mut ZipArchive<File>) -> anyhow::Result<bool> {
-    let mut manifest = zip
-        .by_name("META-INF/MANIFEST.MF")
-        .context("No manifest file is given")?;
-    let content = {
-        let mut content = String::new();
-        manifest
-            .read_to_string(&mut content)
-            .context("Manifest file does not use utf-8 encoding")?;
-        content
-    };
-    let mut lines = content.split('\n');
-
-    Ok(lines.any(|line| line == "Multi-Release: true"))
-}
-
 /// A class that represents Java version from 1 to 21 (inclusively)
 #[repr(transparent)]
 struct JavaVersion(u16);
@@ -116,6 +100,24 @@ fn get_major_version_from_class(classfile_bytes: &[u8], op: &ParseOptions) -> an
         parse_class_with_options(classfile_bytes, op).map(|class| class.major_version)?;
 
     Ok(major_version)
+}
+
+/// Parse multi-release information from manifest file
+/// https://docs.oracle.com/en/java/javase/20/docs/specs/jar/jar.html#multi-release-jar-files
+fn is_multi_release_jar(zip: &mut ZipArchive<File>) -> anyhow::Result<bool> {
+    let mut manifest = zip
+        .by_name("META-INF/MANIFEST.MF")
+        .context("No manifest file is given")?;
+    let content = {
+        let mut content = String::new();
+        manifest
+            .read_to_string(&mut content)
+            .context("Manifest file does not use utf-8 encoding")?;
+        content
+    };
+    let mut lines = content.lines();
+
+    Ok(lines.any(|line| line == "Multi-Release: true"))
 }
 
 fn get_java_version_from_jarfile(filepath: &str, op: &ParseOptions) -> anyhow::Result<JavaVersion> {
@@ -205,6 +207,8 @@ fn split_multi_release_path_to_java_version_and_filepath(
     }
 }
 
+/// Parse multi-release jar file
+/// https://docs.oracle.com/en/java/javase/20/docs/specs/jar/jar.html#multi-release-jar-files
 fn get_major_version_from_multi_release_jar(
     zip: &mut ZipArchive<File>,
     op: &ParseOptions,
@@ -215,9 +219,13 @@ fn get_major_version_from_multi_release_jar(
         let file = zip.by_index(i)?;
         let filename = file.name();
 
+        // All the multi-release class files are stored inside
+        // this folder
         if !filename.starts_with("META-INF/versions/") {
             continue;
         }
+
+        // Ignore unsupported versions
         if let Some((java_version, filepath)) =
             split_multi_release_path_to_java_version_and_filepath(filename)
         {
