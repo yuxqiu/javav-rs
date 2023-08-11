@@ -2,7 +2,7 @@
 
 Displays version information for `.class` files (major.minor) and `.jar` files (max class version inside jar). One possible use case is to determine the minimum JVM version required to run given `.class` or `.jar` files.
 
-Support Windows, macOS, and Linux.
+Support up to Java 17 on Windows, macOS, and Linux.
 
 
 ## Installation
