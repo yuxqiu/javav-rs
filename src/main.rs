@@ -1,5 +1,6 @@
 use core::fmt;
 use std::{
+    collections::HashMap,
     fs::{self, File},
     io::Read,
 };
@@ -67,8 +68,15 @@ fn is_multi_release_jar(zip: &mut ZipArchive<File>) -> anyhow::Result<bool> {
     Ok(lines.any(|line| line == "Multi-Release: true"))
 }
 
+/// A class that represents Java version from 1 to 21 (inclusively)
 #[repr(transparent)]
 struct JavaVersion(u16);
+
+impl JavaVersion {
+    fn to_major_version(&self) -> u16 {
+        self.0 + 44
+    }
+}
 
 impl fmt::Display for JavaVersion {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -87,12 +95,11 @@ fn get_java_version_from_classfile(
     filepath: &str,
     op: &ParseOptions,
 ) -> anyhow::Result<JavaVersion> {
-    let f_fail_to_read = || format!("Failed to read java class from {}", filepath);
+    let f_fail_to_read = || format!("Failed to read class from {}", filepath);
     let classfile_bytes = fs::read(filepath).with_context(f_fail_to_read)?;
 
-    let major_version = parse_class_with_options(&classfile_bytes, &op)
-        .map(|class| class.major_version)
-        .with_context(|| format!("Failed to parse java class from {}", filepath))?;
+    let major_version = get_major_version_from_class(&classfile_bytes, &op)
+        .with_context(|| format!("Failed to parse class from {}", filepath))?;
 
     Ok(
         major_version_to_java_version(major_version).with_context(|| {
@@ -104,45 +111,61 @@ fn get_java_version_from_classfile(
     )
 }
 
+fn get_major_version_from_class(classfile_bytes: &[u8], op: &ParseOptions) -> anyhow::Result<u16> {
+    let major_version =
+        parse_class_with_options(&classfile_bytes, &op).map(|class| class.major_version)?;
+
+    Ok(major_version)
+}
+
 fn get_java_version_from_jarfile(filepath: &str, op: &ParseOptions) -> anyhow::Result<JavaVersion> {
-    let f_fail_to_read = || format!("Failed to read java class from {}", filepath);
-    let f_fail_to_get_version = || format!("Failed to get java version from {}", filepath);
+    let f_fail_to_read = || format!("Failed to read class from {}", filepath);
+    let f_fail_to_get_major_version = || format!("Failed to get major version from {}", filepath);
 
     let archive = File::open(filepath).with_context(f_fail_to_read)?;
     let mut zip = ZipArchive::new(archive).with_context(f_fail_to_read)?;
 
+    let major_version = if is_multi_release_jar(&mut zip)
+        .with_context(|| format!("Failed to parse manifest file from {}", filepath))?
+    {
+        get_major_version_from_multi_release_jar(&mut zip, &op)
+            .with_context(f_fail_to_get_major_version)?
+    } else {
+        get_major_version_from_simple_jar(&mut zip, &op)
+            .with_context(f_fail_to_get_major_version)?
+    };
+
     Ok(
-        if is_multi_release_jar(&mut zip)
-            .with_context(|| format!("Failed to parse manifest file from {}", filepath))?
-        {
-            get_java_version_from_simple_jar(&mut zip, &op).with_context(f_fail_to_get_version)?
-        } else {
-            get_java_version_from_simple_jar(&mut zip, &op).with_context(f_fail_to_get_version)?
-        },
+        major_version_to_java_version(major_version).with_context(|| {
+            format!(
+                "Unsupported major version {} from {}",
+                major_version, filepath
+            )
+        })?,
     )
 }
 
-fn get_java_version_from_simple_jar(
+fn get_major_version_from_simple_jar(
     zip: &mut ZipArchive<File>,
     op: &ParseOptions,
-) -> anyhow::Result<JavaVersion> {
+) -> anyhow::Result<u16> {
     let mut major_version = 0;
+    let mut has_class = false;
 
     for i in 0..zip.len() {
         let mut file = zip.by_index(i)?;
 
         if file.name().ends_with(".class") {
+            has_class = true;
+
             let classfile_bytes = {
                 let mut classfile_bytes: Vec<u8> = Vec::new();
                 file.read_to_end(&mut classfile_bytes)?;
                 classfile_bytes
             };
 
-            let (major_version_c, _) = parse_class_with_options(&classfile_bytes, &op)
-                .map(|class| (class.major_version, class.minor_version))
-                .with_context(|| {
-                    format!("Failed to parse java class from entry {}", file.name())
-                })?;
+            let major_version_c = get_major_version_from_class(&classfile_bytes, &op)
+                .with_context(|| format!("Failed to parse class from entry {}", file.name()))?;
 
             major_version = std::cmp::max(major_version, major_version_c);
         }
@@ -157,6 +180,83 @@ fn get_java_version_from_simple_jar(
         // If this happens fairly often, we will implement a fix to deal with this situation.
     }
 
-    Ok(major_version_to_java_version(major_version)
-        .with_context(|| format!("Unsupported major version {}", major_version))?)
+    if !has_class {
+        bail!("No class is found");
+    }
+
+    Ok(major_version)
+}
+
+fn split_multi_release_path_to_java_version_and_filepath(
+    path: &str,
+) -> Option<(JavaVersion, &str)> {
+    // len(META-INF/versions/) == 18
+    // Guaranteed to start at a new code point
+    let version_start = &path[18..];
+    let filepath_start_idx = version_start.find("/");
+    let java_v = filepath_start_idx.map(|idx| version_start[..idx].parse().unwrap_or(0 as u16))?;
+
+    match java_v {
+        9..=21 => Some((
+            JavaVersion(java_v),
+            // guarantee to have value because `java_v` has a value between 9-21
+            &version_start[filepath_start_idx.unwrap()..],
+        )),
+        _ => None,
+    }
+}
+
+fn get_major_version_from_multi_release_jar(
+    zip: &mut ZipArchive<File>,
+    op: &ParseOptions,
+) -> anyhow::Result<u16> {
+    // Build a map that stores versions associated with multi-release files
+    let mut map = HashMap::new();
+    for i in 0..zip.len() {
+        let file = zip.by_index(i)?;
+        let filename = file.name();
+
+        if !filename.starts_with("META-INF/versions/") {
+            continue;
+        }
+        if let Some((java_version, filepath)) =
+            split_multi_release_path_to_java_version_and_filepath(filename)
+        {
+            map.insert(filepath.to_string(), java_version.to_major_version());
+        }
+    }
+
+    let mut major_version = 0;
+    let mut has_class = false;
+
+    for i in 0..zip.len() {
+        let mut file = zip.by_index(i)?;
+
+        let filename = file.name();
+        if filename.starts_with("META-INF/versions/") || !filename.ends_with(".class") {
+            continue;
+        }
+
+        has_class = true;
+        let classfile_bytes = {
+            let mut classfile_bytes: Vec<u8> = Vec::new();
+            file.read_to_end(&mut classfile_bytes)?;
+            classfile_bytes
+        };
+
+        let major_version_c = get_major_version_from_class(&classfile_bytes, &op)
+            .with_context(|| format!("Failed to parse class from entry {}", file.name()))?;
+        let major_version_c = if let Some(major_version_from_map) = map.get(file.name()) {
+            std::cmp::min(major_version_from_map.clone(), major_version_c)
+        } else {
+            major_version_c
+        };
+        major_version = std::cmp::max(major_version, major_version_c);
+    }
+
+    if !has_class {
+        bail!("No class is found");
+    }
+
+    Ok(major_version)
 }
